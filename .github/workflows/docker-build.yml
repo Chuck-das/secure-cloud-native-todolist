@@ -1,0 +1,39 @@
+name: Build Docker Images
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build backend image
+        run: docker build -t ghcr.io/${{ github.repository_owner }}/todolist-backend:latest ./backend
+
+      - name: Build frontend image
+        run: docker build -t ghcr.io/${{ github.repository_owner }}/todolist-frontend:latest ./frontend
+
+      - name: Push backend image
+        if: github.event_name == 'push'
+        run: docker push ghcr.io/${{ github.repository_owner }}/todolist-backend:latest
+
+      - name: Push frontend image
+        if: github.event_name == 'push'
+        run: docker push ghcr.io/${{ github.repository_owner }}/todolist-frontend:latest
