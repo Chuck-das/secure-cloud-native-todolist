@@ -30,6 +30,10 @@ function App() {
     const response = await fetch(`${API_BASE}${path}`, options);
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
+      if (response.status === 401 && !path.startsWith("/auth/")) {
+        logout();
+        throw new Error("Session expired. Please log in again.");
+      }
       throw new Error(body.error || `Request failed: ${response.status}`);
     }
     if (response.status === 204) return null;
