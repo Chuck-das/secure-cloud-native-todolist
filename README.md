@@ -31,8 +31,8 @@ The project uses OpenNebula as the IaaS layer. The intended deployment uses:
 
 - one OpenNebula VM;
 - one Kubernetes node, because k3s is installed as a single-node cluster;
-- Ubuntu Server as the VM operating system;
-- the VM network interface/IP to expose the application through k3s Ingress;
+- Ubuntu 24.04 Server as the VM operating system;
+- the VM network interface/IP (`10.0.0.15` in the deployed lab environment) to expose the application through k3s Ingress;
 - SSH access to install k3s, apply Kubernetes manifests, and inspect the demo.
 
 This keeps the infrastructure simple while still showing how an application
@@ -101,24 +101,26 @@ Install k3s on the VM:
 
 ```bash
 curl -sfL https://get.k3s.io | sh -
-sudo kubectl get nodes
+sudo k3s kubectl get nodes
 ```
 
 Apply the manifests:
 
 ```bash
-sudo kubectl apply -f k8s/
-sudo kubectl get pods -n todolist
-sudo kubectl get ingress -n todolist
+sudo k3s kubectl apply -f k8s/
+sudo k3s kubectl get pods -n todolist
+sudo k3s kubectl get ingress -n todolist
 ```
 
-If the VM has a public IP and k3s Traefik Ingress is enabled, the application can
-be reached through the VM IP. If Ingress is not available in the course
-environment, the frontend service can be temporarily exposed with port-forward:
+In the deployed lab environment, k3s Traefik Ingress exposes the application on
+the VM IP. If the VM is only reachable through SSH, use a local tunnel from the
+development machine:
 
-```bash
-sudo kubectl -n todolist port-forward service/frontend 8080:8080 --address 0.0.0.0
+```powershell
+ssh -L 8080:10.0.0.15:80 labvm
 ```
+
+Then open `http://localhost:8080`.
 
 ## Security Verification
 
@@ -127,9 +129,7 @@ Check that the backend can access PostgreSQL through the application.
 Then verify that another pod cannot connect directly to PostgreSQL:
 
 ```bash
-sudo kubectl run net-test -n todolist --rm -it --image=alpine -- sh
-apk add --no-cache postgresql-client
-psql -h postgres -U todo_user -d todo_db
+sudo k3s kubectl run denied-client -n todolist --image=postgres:16-alpine --restart=Never --rm -i --command -- sh -c "timeout 5 pg_isready -h postgres -p 5432; echo exit:$?"
 ```
 
 This connection should be denied by the `NetworkPolicy` unless the test pod has
@@ -151,20 +151,20 @@ configures the Horizontal Pod Autoscaler.
 Install or verify metrics-server:
 
 ```bash
-sudo kubectl top pods -n todolist
+sudo k3s kubectl top pods -n todolist
 ```
 
 Generate repeated requests to the backend load endpoint:
 
 ```bash
-for i in $(seq 1 2000); do curl -s http://<VM-IP>/api/load > /dev/null & done
+for i in $(seq 1 2000); do curl -s http://10.0.0.15/api/load > /dev/null & done
 ```
 
 Watch HPA and pods:
 
 ```bash
-sudo kubectl get hpa -n todolist -w
-sudo kubectl get pods -n todolist -w
+sudo k3s kubectl get hpa -n todolist -w
+sudo k3s kubectl get pods -n todolist -w
 ```
 
 Expected behavior: the backend deployment scales from 1 replica up to 2 or 3
@@ -198,3 +198,11 @@ tar --exclude='node_modules' --exclude='.git' -czf Liu.tar.gz dear-students-here
 If the instructors require the two-surname naming format despite the individual
 project approval, rename the archive according to their instruction before
 uploading it.
+
+## Use of LLM Tools
+
+OpenAI ChatGPT/Codex was used as an assistant for code generation, debugging,
+documentation drafting, and demo preparation. It was used to clarify concepts,
+discuss design choices, help draft parts of the code and documentation, and
+troubleshoot deployment issues. All suggestions were reviewed, adapted, tested,
+and validated in the final project environment before submission.

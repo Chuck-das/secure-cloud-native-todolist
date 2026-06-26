@@ -28,12 +28,20 @@ layer and the PaaS layer discussed in the course.
 The project makes use of both IaaS and PaaS layers. At the infrastructure level,
 a single virtual machine is provisioned using the course OpenNebula environment.
 This VM is used as the only Kubernetes node and hosts a single-node k3s cluster.
+In the final deployment, the VM runs Ubuntu 24.04, has the hostname
+`labJU7KS0`, and exposes the application through its network interface
+(`10.0.0.15` in the lab environment). The OpenNebula part of the demo therefore
+focuses on the VM as the IaaS resource: its running state, operating system,
+allocated resources, network address, and the fact that the Kubernetes platform
+is installed on top of it.
 
 The application consists of a React frontend, a Node.js backend API, and a
 PostgreSQL database. The frontend and backend are built as separate Docker
 images, while PostgreSQL uses the official image. PostgreSQL data is persisted
 using a Kubernetes PersistentVolumeClaim backed by the default k3s `local-path`
-storage class.
+storage class. This choice is appropriate for the single-node cluster used in
+the project, because the PostgreSQL data directory is mounted on persistent
+storage on the same VM and survives PostgreSQL pod restarts.
 
 GitHub Actions is used as a CI pipeline to build the Docker images for the
 frontend and backend. For security, the project uses Kubernetes Secrets,
@@ -103,3 +111,14 @@ During the final demo, I will show the main application features, demonstrate
 that data survives a PostgreSQL pod restart, verify that the database is not
 directly accessible from unauthorized pods, and trigger the Horizontal Pod
 Autoscaler by sending repeated requests to the backend API.
+
+## 6. Use of LLM Tools
+
+During the project, I used OpenAI ChatGPT/Codex as an assistant for code
+generation, debugging, documentation drafting, and demo preparation. The tool
+was used to clarify concepts, discuss design choices, help draft parts of the
+code and documentation, and troubleshoot deployment issues.
+
+All suggestions were reviewed, adapted, tested, and validated by me in the final
+project environment. The final implementation, configuration, verification, and
+report are my responsibility.
