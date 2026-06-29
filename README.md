@@ -27,12 +27,16 @@ Database credentials and the JWT secret are stored with Kubernetes Secrets.
 
 ## OpenNebula Usage
 
-The project uses OpenNebula as the IaaS layer. The intended deployment uses:
+The project uses OpenNebula as the IaaS layer. The final deployment uses:
 
-- one OpenNebula VM;
+- one OpenNebula VM named `todolist-k3s-node`;
 - one Kubernetes node, because k3s is installed as a single-node cluster;
-- Ubuntu 24.04 Server as the VM operating system;
-- the VM network interface/IP (`10.0.0.15` in the deployed lab environment) to expose the application through k3s Ingress;
+- Ubuntu Minimal 22.04 as the VM operating system;
+- 2 vCPU and 4 GB RAM for the VM;
+- one VM network interface on the OpenNebula `vnet` network
+  (`172.16.100.4` in the final deployment);
+- an additional 20 GB OpenNebula disk mounted at `/var/lib/rancher`, where k3s
+  stores its container runtime data and local-path persistent volumes;
 - SSH access to install k3s, apply Kubernetes manifests, and inspect the demo.
 
 This keeps the infrastructure simple while still showing how an application
@@ -44,7 +48,10 @@ PostgreSQL uses a Kubernetes `PersistentVolumeClaim`.
 
 Because this is a single-node k3s cluster, the project uses the default k3s
 `local-path` storage class. The PostgreSQL data directory is mounted on the PVC,
-so Todo data survives PostgreSQL pod restarts.
+so Todo data survives PostgreSQL pod restarts. In the final deployment,
+`local-path` storage is backed by the extra 20 GB disk mounted at
+`/var/lib/rancher` on the OpenNebula VM. PostgreSQL requests a 2 Gi PVC named
+`postgres-data`.
 
 The relevant file is:
 
@@ -95,14 +102,40 @@ k8s/03-backend.yaml
 k8s/04-frontend.yaml
 ```
 
+Deployment to the k3s cluster is performed manually from the OpenNebula VM by
+applying the Kubernetes manifests. The project does not use an automatic CD step
+that connects from GitHub Actions to the VM.
+
 ## k3s Deployment on the OpenNebula VM
 
-Install k3s on the VM:
+The OpenNebula VM has a small root disk, so the additional OpenNebula disk is
+mounted before installing k3s:
+
+```bash
+sudo mkfs.ext4 /dev/sda
+sudo mkdir -p /var/lib/rancher
+sudo mount /dev/sda /var/lib/rancher
+sudo blkid /dev/sda
+```
+
+The disk UUID is then added to `/etc/fstab` so the mount survives reboots.
+
+Install k3s on the VM after `/var/lib/rancher` is mounted:
 
 ```bash
 curl -sfL https://get.k3s.io | sh -
 sudo k3s kubectl get nodes
 ```
+
+Traefik is used as the Ingress Controller. In the final deployment, Traefik is
+changed to `NodePort` so it does not occupy the OpenNebula host's port 80:
+
+```bash
+sudo k3s kubectl patch svc traefik -n kube-system --type=merge -p '{"spec":{"type":"NodePort"}}'
+sudo k3s kubectl get svc traefik -n kube-system
+```
+
+The final HTTP NodePort used in the demo is `31600`.
 
 Apply the manifests:
 
@@ -112,19 +145,30 @@ sudo k3s kubectl get pods -n todolist
 sudo k3s kubectl get ingress -n todolist
 ```
 
-In the deployed lab environment, k3s Traefik Ingress exposes the application on
-the VM IP. If the VM is only reachable through SSH, use a local tunnel from the
-development machine:
+Because the OpenNebula VM is reachable through the lab VM, use a local tunnel
+from the development machine:
 
 ```powershell
-ssh -L 8080:10.0.0.15:80 labvm
+ssh -L 8082:172.16.100.4:31600 labvm
 ```
 
-Then open `http://localhost:8080`.
+Then open `http://localhost:8082`.
 
 ## Security Verification
 
 Check that the backend can access PostgreSQL through the application.
+For example, registering and logging in a user goes through the backend API and
+requires PostgreSQL read/write access:
+
+```bash
+curl -X POST http://127.0.0.1:31600/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"dbtest","password":"test123"}'
+
+curl -X POST http://127.0.0.1:31600/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"dbtest","password":"test123"}'
+```
 
 Then verify that another pod cannot connect directly to PostgreSQL:
 
@@ -157,14 +201,20 @@ sudo k3s kubectl top pods -n todolist
 Generate repeated requests to the backend load endpoint:
 
 ```bash
-for i in $(seq 1 2000); do curl -s http://10.0.0.15/api/load > /dev/null & done
+for round in $(seq 1 5); do
+  for i in $(seq 1 600); do curl -s http://127.0.0.1:31600/api/load > /dev/null & done
+  sleep 5
+done
 ```
+
+Stop the load generator with `Ctrl+C` after the backend has scaled.
 
 Watch HPA and pods:
 
 ```bash
-sudo k3s kubectl get hpa -n todolist -w
-sudo k3s kubectl get pods -n todolist -w
+sudo k3s kubectl get hpa -n todolist
+sudo k3s kubectl get pods -n todolist
+sudo k3s kubectl top pods -n todolist
 ```
 
 Expected behavior: the backend deployment scales from 1 replica up to 2 or 3
