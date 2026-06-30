@@ -1,72 +1,160 @@
 # Secure Cloud-Native TodoList Application
 
-This repository contains the final project for the Fog and Cloud Computing course.
-It implements a small multi-user TodoList application and focuses on the
-cloud-native deployment around it: Docker, Kubernetes, persistent storage,
-security isolation, CI, and autoscaling.
+Final project for the Fog and Cloud Computing course.
 
-## Architecture
+This project implements a small multi-user TodoList web application and deploys
+it using cloud-native technologies. The application itself is intentionally
+simple: users can register, log in, and manage their own Todo items. The main
+focus is the infrastructure around the application: OpenNebula, Docker,
+Kubernetes, persistent storage, security controls, CI, and autoscaling.
 
-The system contains three main components:
+## Project Overview
+
+The system is composed of three application components:
 
 - **Frontend:** React web interface served by Nginx.
-- **Backend API:** Node.js/Express service for authentication and Todo CRUD.
-- **Database:** PostgreSQL with Kubernetes persistent storage.
+- **Backend API:** Node.js/Express REST API for authentication and Todo CRUD.
+- **Database:** PostgreSQL database storing users and Todo items.
 
-Infrastructure layout:
+The deployment follows this structure:
 
 ```text
-OpenNebula VM (IaaS)
-  -> k3s Kubernetes single-node cluster (PaaS)
+OpenNebula VM
+  -> k3s Kubernetes cluster
     -> Docker containers
-      -> React frontend, Node.js backend API, PostgreSQL
+      -> Frontend, Backend API, PostgreSQL
 ```
 
-The backend is the only application component allowed to access PostgreSQL.
-Database credentials and the JWT secret are stored with Kubernetes Secrets.
+Only the frontend and backend API are exposed through Kubernetes Ingress.
+PostgreSQL stays internal to the cluster and is reachable only by the backend
+API.
 
-## OpenNebula Usage
-
-The project uses OpenNebula as the IaaS layer. The final deployment uses:
-
-- one OpenNebula VM named `todolist-k3s-node`;
-- one Kubernetes node, because k3s is installed as a single-node cluster;
-- Ubuntu Minimal 22.04 as the VM operating system;
-- 2 vCPU and 4 GB RAM for the VM;
-- one VM network interface on the OpenNebula `vnet` network
-  (`172.16.100.4` in the final deployment);
-- an additional 20 GB OpenNebula disk mounted at `/var/lib/rancher`, where k3s
-  stores its container runtime data and local-path persistent volumes;
-- SSH access to install k3s, apply Kubernetes manifests, and inspect the demo.
-
-This keeps the infrastructure simple while still showing how an application
-platform can be built on top of an IaaS-provisioned virtual machine.
-
-## Persistent Storage
-
-PostgreSQL uses a Kubernetes `PersistentVolumeClaim`.
-
-Because this is a single-node k3s cluster, the project uses the default k3s
-`local-path` storage class. The PostgreSQL data directory is mounted on the PVC,
-so Todo data survives PostgreSQL pod restarts. In the final deployment,
-`local-path` storage is backed by the extra 20 GB disk mounted at
-`/var/lib/rancher` on the OpenNebula VM. PostgreSQL requests a 2 Gi PVC named
-`postgres-data`.
-
-The relevant file is:
+## Repository Structure
 
 ```text
-k8s/02-postgres.yaml
+.
+├── backend/                  Node.js backend API
+├── frontend/                 React frontend
+├── k8s/                      Kubernetes manifests
+├── docs/                     Demo and presentation notes
+├── .github/workflows/        GitHub Actions CI workflow
+├── docker-compose.yml        Local development setup
+└── README.md                 This document
+```
+
+The `k8s/` directory contains standard Kubernetes manifests. The project is
+deployed on k3s, which is a lightweight Kubernetes distribution, so the same
+Kubernetes YAML resources are used.
+
+## OpenNebula Infrastructure
+
+The final deployment runs on a virtual machine provisioned through the course
+OpenNebula environment.
+
+The VM used for the final demo is:
+
+```text
+Name: todolist-k3s-node
+Operating system: Ubuntu Minimal 22.04
+CPU: 2 vCPU
+Memory: 4 GB
+Network: OpenNebula vnet
+VM IP: 172.16.100.4
+Extra disk: 20 GB
+```
+
+The extra OpenNebula disk is mounted at:
+
+```text
+/var/lib/rancher
+```
+
+This location is used by k3s for its runtime data and by the default k3s
+`local-path` storage provisioner. This means that the Kubernetes persistent
+volume used by PostgreSQL is backed by the additional disk attached to the
+OpenNebula VM.
+
+## Kubernetes Deployment
+
+The project uses k3s as a single-node Kubernetes cluster running inside the
+OpenNebula VM.
+
+The Kubernetes resources are:
+
+- `Namespace` for isolating project resources.
+- `Deployment` and `Service` for the frontend.
+- `Deployment` and `Service` for the backend API.
+- `Deployment`, `Service`, and `PersistentVolumeClaim` for PostgreSQL.
+- `Ingress` for external HTTP access.
+- `Secret` for database credentials and JWT secret.
+- `NetworkPolicy` for database access control.
+- `HorizontalPodAutoscaler` for backend autoscaling.
+
+Apply all manifests with:
+
+```bash
+sudo k3s kubectl apply -f k8s/
+```
+
+Check the deployed resources:
+
+```bash
+sudo k3s kubectl get pods -n todolist
+sudo k3s kubectl get svc -n todolist
+sudo k3s kubectl get ingress -n todolist
+sudo k3s kubectl get hpa -n todolist
+```
+
+Expected result: frontend, backend, and PostgreSQL pods should all be
+`Running`.
+
+## Accessing the Application
+
+Traefik is used as the k3s Ingress Controller. In the final deployment, Traefik
+is exposed through a NodePort instead of using the OpenNebula VM port 80
+directly.
+
+Check the Traefik NodePort:
+
+```bash
+sudo k3s kubectl get svc traefik -n kube-system
+```
+
+In the final deployment, the HTTP NodePort is:
+
+```text
+31600
+```
+
+From the local machine, open an SSH tunnel through the lab VM:
+
+```powershell
+ssh -L 8082:172.16.100.4:31600 labvm
+```
+
+Then open:
+
+```text
+http://localhost:8082
+```
+
+The path routing is:
+
+```text
+/      -> frontend service
+/api   -> backend service
 ```
 
 ## Local Development
+
+For local development without Kubernetes, Docker Compose can be used.
 
 Requirements:
 
 - Docker
 - Docker Compose
 
-Run locally:
+Run:
 
 ```bash
 docker compose up --build
@@ -78,87 +166,144 @@ Then open:
 http://localhost:8080
 ```
 
-The backend API is available at:
+The local backend API is available at:
 
 ```text
 http://localhost:3000/api
 ```
 
-## GitHub Actions CI
+## CI Pipeline
 
-The workflow in `.github/workflows/docker-build.yml` builds the frontend and
-backend Docker images on every push. On pushes to the repository, it also pushes
-the images to GitHub Container Registry:
+GitHub Actions is used as the CI pipeline.
+
+The workflow is defined in:
 
 ```text
-ghcr.io/chuck-das/todolist-frontend:latest
+.github/workflows/docker-build.yml
+```
+
+On each push or pull request, the workflow builds the Docker images for:
+
+```text
+backend
+frontend
+```
+
+On pushes to the `main` branch, the images are also pushed to GitHub Container
+Registry:
+
+```text
 ghcr.io/chuck-das/todolist-backend:latest
+ghcr.io/chuck-das/todolist-frontend:latest
 ```
 
-The Kubernetes manifests already reference these image names:
+The Kubernetes manifests reference these images. Deployment to the OpenNebula VM
+is performed manually by pulling the repository and applying the Kubernetes
+manifests.
+
+This project implements CI, but not automatic CD to the VM.
+
+## Persistent Storage
+
+PostgreSQL uses a Kubernetes `PersistentVolumeClaim`:
 
 ```text
-k8s/03-backend.yaml
-k8s/04-frontend.yaml
+postgres-data
 ```
 
-Deployment to the k3s cluster is performed manually from the OpenNebula VM by
-applying the Kubernetes manifests. The project does not use an automatic CD step
-that connects from GitHub Actions to the VM.
+The PVC requests:
 
-## k3s Deployment on the OpenNebula VM
-
-The OpenNebula VM has a small root disk, so the additional OpenNebula disk is
-mounted before installing k3s:
-
-```bash
-sudo mkfs.ext4 /dev/sda
-sudo mkdir -p /var/lib/rancher
-sudo mount /dev/sda /var/lib/rancher
-sudo blkid /dev/sda
+```text
+2 Gi
 ```
 
-The disk UUID is then added to `/etc/fstab` so the mount survives reboots.
+The storage class is:
 
-Install k3s on the VM after `/var/lib/rancher` is mounted:
-
-```bash
-curl -sfL https://get.k3s.io | sh -
-sudo k3s kubectl get nodes
+```text
+local-path
 ```
 
-Traefik is used as the Ingress Controller. In the final deployment, Traefik is
-changed to `NodePort` so it does not occupy the OpenNebula host's port 80:
+In k3s, `local-path` stores persistent volume data on the node filesystem. Since
+`/var/lib/rancher` is mounted on the additional 20 GB OpenNebula disk, the
+PostgreSQL data is backed by that OpenNebula-attached disk.
+
+Check the PVC:
 
 ```bash
-sudo k3s kubectl patch svc traefik -n kube-system --type=merge -p '{"spec":{"type":"NodePort"}}'
-sudo k3s kubectl get svc traefik -n kube-system
+sudo k3s kubectl get pvc -n todolist
 ```
 
-The final HTTP NodePort used in the demo is `31600`.
+Expected result:
 
-Apply the manifests:
+```text
+postgres-data   Bound   ...   2Gi   RWO   local-path
+```
+
+To test persistence, create Todo data in the web application, then delete the
+PostgreSQL pod:
 
 ```bash
-sudo k3s kubectl apply -f k8s/
+sudo k3s kubectl delete pod -n todolist -l app=postgres
 sudo k3s kubectl get pods -n todolist
-sudo k3s kubectl get ingress -n todolist
 ```
 
-Because the OpenNebula VM is reachable through the lab VM, use a local tunnel
-from the development machine:
+Kubernetes will create a new PostgreSQL pod automatically. After the new pod is
+running, refresh the web application. The Todo data should still be present.
 
-```powershell
-ssh -L 8082:172.16.100.4:31600 labvm
+## Security Controls
+
+The project includes both application-level and Kubernetes-level security.
+
+At the application level:
+
+- users must register and log in;
+- each user receives a JWT token;
+- each Todo item belongs to a specific user;
+- users can only access their own Todo items.
+
+At the Kubernetes level:
+
+- database credentials and JWT secret are stored in a Kubernetes `Secret`;
+- PostgreSQL is exposed only as an internal `ClusterIP` service;
+- a `NetworkPolicy` allows only backend pods to connect to PostgreSQL;
+- containers use security contexts where possible;
+- privilege escalation is disabled;
+- CPU and memory requests and limits are defined.
+
+Check the Secret:
+
+```bash
+sudo k3s kubectl get secret todolist-secrets -n todolist
 ```
 
-Then open `http://localhost:8082`.
+Check the NetworkPolicy:
 
-## Security Verification
+```bash
+sudo k3s kubectl describe networkpolicy postgres-backend-only -n todolist
+```
 
-Check that the backend can access PostgreSQL through the application.
-For example, registering and logging in a user goes through the backend API and
-requires PostgreSQL read/write access:
+Expected access rules:
+
+```text
+Backend API -> PostgreSQL: allowed
+Frontend -> PostgreSQL: denied
+External network -> PostgreSQL: denied
+Other pods -> PostgreSQL: denied
+```
+
+To verify that an unauthorized pod cannot directly access PostgreSQL:
+
+```bash
+sudo k3s kubectl run denied-client -n todolist \
+  --image=postgres:16-alpine \
+  --restart=Never \
+  --rm -i \
+  --command -- sh -c "timeout 5 pg_isready -h postgres -p 5432; echo exit:$?"
+```
+
+Expected result: the connection should time out or report no response.
+
+To verify that the backend can access PostgreSQL, use the application API:
 
 ```bash
 curl -X POST http://127.0.0.1:31600/api/auth/register \
@@ -170,35 +315,40 @@ curl -X POST http://127.0.0.1:31600/api/auth/login \
   -d '{"username":"dbtest","password":"test123"}'
 ```
 
-Then verify that another pod cannot connect directly to PostgreSQL:
+Expected result: the backend returns a JWT token and user information.
 
-```bash
-sudo k3s kubectl run denied-client -n todolist --image=postgres:16-alpine --restart=Never --rm -i --command -- sh -c "timeout 5 pg_isready -h postgres -p 5432; echo exit:$?"
+## Autoscaling
+
+The backend API is configured with a Horizontal Pod Autoscaler.
+
+The HPA manifest is:
+
+```text
+k8s/07-hpa.yaml
 ```
 
-This connection should be denied by the `NetworkPolicy` unless the test pod has
-the backend label.
+The HPA monitors backend CPU usage and scales the backend deployment between:
 
-Security mechanisms used:
+```text
+minimum replicas: 1
+maximum replicas: 3
+target CPU usage: 50%
+```
 
-- Kubernetes Secrets for database credentials and JWT signing key;
-- NetworkPolicy allowing only backend pods to access PostgreSQL;
-- non-root containers where possible;
-- disabled privilege escalation;
-- CPU and memory requests/limits.
-
-## HPA Demo
-
-The backend deployment defines CPU requests and limits, and `k8s/07-hpa.yaml`
-configures the Horizontal Pod Autoscaler.
-
-Install or verify metrics-server:
+Check the HPA:
 
 ```bash
+sudo k3s kubectl get hpa -n todolist
+```
+
+Check pod status and resource usage:
+
+```bash
+sudo k3s kubectl get pods -n todolist
 sudo k3s kubectl top pods -n todolist
 ```
 
-Generate repeated requests to the backend load endpoint:
+Generate load:
 
 ```bash
 for round in $(seq 1 5); do
@@ -207,9 +357,7 @@ for round in $(seq 1 5); do
 done
 ```
 
-Stop the load generator with `Ctrl+C` after the backend has scaled.
-
-Watch HPA and pods:
+Then check HPA and pods again:
 
 ```bash
 sudo k3s kubectl get hpa -n todolist
@@ -217,42 +365,61 @@ sudo k3s kubectl get pods -n todolist
 sudo k3s kubectl top pods -n todolist
 ```
 
-Expected behavior: the backend deployment scales from 1 replica up to 2 or 3
-replicas while CPU usage is high.
+Expected result: when CPU usage goes above the target, the backend deployment
+scales from one replica to two or three replicas.
 
-## Demo Checklist
+## Useful Demo Commands
 
-During the presentation, show:
-
-1. The application running in the browser.
-2. User registration and login.
-3. Creating, completing, and deleting Todo items.
-4. The OpenNebula VM used for the deployment.
-5. k3s node and Kubernetes pods.
-6. PostgreSQL data persistence after pod restart.
-7. NetworkPolicy restricting PostgreSQL access.
-8. HPA scaling the backend under load.
-9. GitHub Actions building Docker images.
-
-## Final Submission Package
-
-The Moodle submission requires one `.tar.gz` archive containing the source code,
-README, and updated proposal.
-
-From the parent directory of this repository, create the archive with:
+Show OpenNebula VM evidence from the lab VM:
 
 ```bash
-tar --exclude='node_modules' --exclude='.git' -czf Liu.tar.gz dear-students-here-is-important-information
+sudo -u oneadmin onevm list
+sudo -u oneadmin onehost list
+sudo -u oneadmin onevnet list
 ```
 
-If the instructors require the two-surname naming format despite the individual
-project approval, rename the archive according to their instruction before
-uploading it.
+Show the OpenNebula VM system:
 
-## Use of LLM Tools
+```bash
+hostname
+cat /etc/os-release
+free -h
+df -h
+lsblk
+ip addr
+```
 
-OpenAI ChatGPT/Codex was used as an assistant for code generation, debugging,
-documentation drafting, and demo preparation. It was used to clarify concepts,
-discuss design choices, help draft parts of the code and documentation, and
-troubleshoot deployment issues. All suggestions were reviewed, adapted, tested,
-and validated in the final project environment before submission.
+Show k3s:
+
+```bash
+sudo k3s kubectl get nodes -o wide
+sudo k3s kubectl get pods -A
+```
+
+Show project resources:
+
+```bash
+sudo k3s kubectl get all -n todolist
+sudo k3s kubectl describe ingress todolist -n todolist
+sudo k3s kubectl get pvc -n todolist
+```
+
+## Known Notes
+
+After rebooting the OpenNebula VM, the backend may restart while PostgreSQL is
+still becoming ready. This is expected during startup. Wait until all pods are
+ready:
+
+```bash
+sudo k3s kubectl get pods -n todolist
+```
+
+If needed, restart the backend deployment:
+
+```bash
+sudo k3s kubectl rollout restart deployment/backend -n todolist
+sudo k3s kubectl rollout status deployment/backend -n todolist
+```
+
+
+
